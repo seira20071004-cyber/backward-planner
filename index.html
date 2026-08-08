@@ -28,36 +28,52 @@
     const { useState, useEffect, useMemo } = React;
 
     function App() {
-      // 1. 自分の目標
-      const [goalTitle, setGoalTitle] = useState("自動逆算計画アプリのMVP作成");
+      // --- 1. ローカルストレージからのデータ復元関数 ---
+      const getInitialState = (key, defaultValue) => {
+        const saved = localStorage.getItem(key);
+        if (saved !== null) {
+          try {
+            return JSON.parse(saved);
+          } catch (e) {
+            return saved;
+          }
+        }
+        return defaultValue;
+      };
+
+      // --- 2. 各ステートの初期値に getInitialState を設定 ---
+      const [goalTitle, setGoalTitle] = useState(() => getInitialState('planner_goalTitle', "自動逆算計画アプリのMVP作成"));
+      const [startDate, setStartDate] = useState(() => getInitialState('planner_startDate', "2026-08-01"));
+      const [deadline, setDeadline] = useState(() => getInitialState('planner_deadline', "2026-08-07"));
+      const [weekdayHours, setWeekdayHours] = useState(() => getInitialState('planner_weekdayHours', 3));
+      const [weekendHours, setWeekendHours] = useState(() => getInitialState('planner_weekendHours', 6));
       
-      // 4. 目標を達成したい期間（開始日〜締め切り）
-      const [startDate, setStartDate] = useState("2026-08-01");
-      const [deadline, setDeadline] = useState("2026-08-07");
-
-      // 5. 平日/休日に使える時間
-      const [weekdayHours, setWeekdayHours] = useState(3);
-      const [weekendHours, setWeekendHours] = useState(6);
-
-      // 2 & 3. 達成に必要なことと必要時間
-      const [tasks, setTasks] = useState([
+      const [tasks, setTasks] = useState(() => getInitialState('planner_tasks', [
         { id: "1", name: "要件定義・設計", estimatedHours: 4 },
         { id: "2", name: "バックエンド計算ロジック実装", estimatedHours: 6 },
         { id: "3", name: "フロントエンド画面作成", estimatedHours: 10 },
-      ]);
+      ]));
 
-      // 6. 予定があって時間を使えない日（日付: 時間）
-      const [blockedDates, setBlockedDates] = useState({
+      const [blockedDates, setBlockedDates] = useState(() => getInitialState('planner_blockedDates', {
         "2026-08-05": 0
-      });
+      }));
 
-      // 新規タスク追加用のローカルステート
+      // 新規追加用の入力ステート（これらは保存不要）
       const [newTaskName, setNewTaskName] = useState("");
       const [newTaskHours, setNewTaskHours] = useState(3);
-
-      // 特例日追加用のローカルステート
       const [newBlockDate, setNewBlockDate] = useState("2026-08-05");
       const [newBlockHours, setNewBlockHours] = useState(0);
+
+      // --- 3. 状態が変わるたびにブラウザへ自動保存 ---
+      useEffect(() => {
+        localStorage.setItem('planner_goalTitle', JSON.stringify(goalTitle));
+        localStorage.setItem('planner_startDate', JSON.stringify(startDate));
+        localStorage.setItem('planner_deadline', JSON.stringify(deadline));
+        localStorage.setItem('planner_weekdayHours', JSON.stringify(weekdayHours));
+        localStorage.setItem('planner_weekendHours', JSON.stringify(weekendHours));
+        localStorage.setItem('planner_tasks', JSON.stringify(tasks));
+        localStorage.setItem('planner_blockedDates', JSON.stringify(blockedDates));
+      }, [goalTitle, startDate, deadline, weekdayHours, weekendHours, tasks, blockedDates]);
 
       // 7. 逆算スケジュール計算エンジン
       const scheduleResult = useMemo(() => {
@@ -461,7 +477,6 @@
                   <div class="space-y-4">
                     {scheduleResult.dailySchedules.map((day) => {
                       const isBlocked = day.availableHours === 0;
-                      const isFull = day.allocatedHours > 0 && day.allocatedHours === day.availableHours;
 
                       return (
                         <div
