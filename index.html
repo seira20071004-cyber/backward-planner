@@ -28,43 +28,35 @@
     const { useState, useEffect, useMemo } = React;
 
     function App() {
-      // --- 1. ローカルストレージからのデータ復元関数 ---
       const getInitialState = (key, defaultValue) => {
         const saved = localStorage.getItem(key);
         if (saved !== null) {
-          try {
-            return JSON.parse(saved);
-          } catch (e) {
-            return saved;
-          }
+          try { return JSON.parse(saved); } catch (e) { return saved; }
         }
         return defaultValue;
       };
 
-      // --- 2. 各ステートの初期値に getInitialState を設定 ---
-      const [goalTitle, setGoalTitle] = useState(() => getInitialState('planner_goalTitle', "自動逆算計画アプリのMVP作成"));
+      const [goalTitle, setGoalTitle] = useState(() => getInitialState('planner_goalTitle', "自動逆算計画アプリの作成"));
       const [startDate, setStartDate] = useState(() => getInitialState('planner_startDate', "2026-08-01"));
       const [deadline, setDeadline] = useState(() => getInitialState('planner_deadline', "2026-08-07"));
       const [weekdayHours, setWeekdayHours] = useState(() => getInitialState('planner_weekdayHours', 3));
       const [weekendHours, setWeekendHours] = useState(() => getInitialState('planner_weekendHours', 6));
       
+      // 優先度 (priority: 'high' | 'medium' | 'low') を保持
       const [tasks, setTasks] = useState(() => getInitialState('planner_tasks', [
-        { id: "1", name: "要件定義・設計", estimatedHours: 4 },
-        { id: "2", name: "バックエンド計算ロジック実装", estimatedHours: 6 },
-        { id: "3", name: "フロントエンド画面作成", estimatedHours: 10 },
+        { id: "1", name: "要件定義・設計", estimatedHours: 4, priority: "high" },
+        { id: "2", name: "バックエンド計算ロジック実装", estimatedHours: 6, priority: "high" },
+        { id: "3", name: "フロントエンド画面作成", estimatedHours: 10, priority: "medium" },
       ]));
 
-      const [blockedDates, setBlockedDates] = useState(() => getInitialState('planner_blockedDates', {
-        "2026-08-05": 0
-      }));
+      const [blockedDates, setBlockedDates] = useState(() => getInitialState('planner_blockedDates', { "2026-08-05": 0 }));
 
-      // 新規追加用の入力ステート（これらは保存不要）
       const [newTaskName, setNewTaskName] = useState("");
       const [newTaskHours, setNewTaskHours] = useState(3);
+      const [newTaskPriority, setNewTaskPriority] = useState("medium");
       const [newBlockDate, setNewBlockDate] = useState("2026-08-05");
       const [newBlockHours, setNewBlockHours] = useState(0);
 
-      // --- 3. 状態が変わるたびにブラウザへ自動保存 ---
       useEffect(() => {
         localStorage.setItem('planner_goalTitle', JSON.stringify(goalTitle));
         localStorage.setItem('planner_startDate', JSON.stringify(startDate));
@@ -75,17 +67,15 @@
         localStorage.setItem('planner_blockedDates', JSON.stringify(blockedDates));
       }, [goalTitle, startDate, deadline, weekdayHours, weekendHours, tasks, blockedDates]);
 
-      // 7. 逆算スケジュール計算エンジン
+      // 逆算スケジュール計算エンジン（優先度ソート対応）
       const scheduleResult = useMemo(() => {
-        if (!startDate || !deadline || new Date(startDate) > new Date(deadline)) {
-          return null;
-        }
+        if (!startDate || !deadline || new Date(startDate) > new Date(deadline)) return null;
 
         const start = new Date(startDate);
         const end = new Date(deadline);
-
         const dateList = [];
         let current = new Date(start);
+
         while (current <= end) {
           dateList.push(new Date(current));
           current.setDate(current.getDate() + 1);
@@ -97,7 +87,6 @@
         for (const dateObj of dateList) {
           const dateStr = dateObj.toISOString().split('T')[0];
           const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
-
           let availableHours = isWeekend ? Number(weekendHours) : Number(weekdayHours);
 
           if (blockedDates[dateStr] !== undefined) {
@@ -120,9 +109,18 @@
 
         const totalRequiredHours = tasks.reduce((sum, t) => sum + Number(t.estimatedHours), 0);
 
-        // 逆算（バックワード）割り当て
+        // 優先度マップ（数値化）
+        const priorityWeight = { high: 3, medium: 2, low: 1 };
+
+        // 優先度が高い順にソートした上で逆算割り当てを行う
+        const sortedTasks = [...tasks].sort((a, b) => {
+          const pA = priorityWeight[a.priority] || 2;
+          const pB = priorityWeight[b.priority] || 2;
+          return pB - pA; // 優先度高い順
+        });
+
         const reversedDates = [...dateList].reverse();
-        const reversedTasks = [...tasks].map(t => ({ ...t })).reverse();
+        const reversedTasks = sortedTasks.map(t => ({ ...t })).reverse();
 
         let taskIndex = 0;
         let currentTaskRemainingHours = reversedTasks[0]?.estimatedHours || 0;
@@ -132,7 +130,6 @@
 
           const dateStr = dateObj.toISOString().split('T')[0];
           const daySchedule = scheduleMap.get(dateStr);
-
           let dayRemainingCapacity = daySchedule.availableHours;
 
           while (dayRemainingCapacity > 0 && taskIndex < reversedTasks.length) {
@@ -146,7 +143,8 @@
 
               daySchedule.assignedTasks.unshift({
                 taskName: currentTask.name,
-                hours: allocateHours
+                hours: allocateHours,
+                priority: currentTask.priority
               });
             }
 
@@ -173,29 +171,24 @@
         };
       }, [startDate, deadline, weekdayHours, weekendHours, tasks, blockedDates]);
 
-      // タスク操作
       const handleAddTask = () => {
         if (!newTaskName.trim()) return;
         setTasks([...tasks, {
           id: Date.now().toString(),
           name: newTaskName,
-          estimatedHours: Number(newTaskHours)
+          estimatedHours: Number(newTaskHours),
+          priority: newTaskPriority
         }]);
         setNewTaskName("");
         setNewTaskHours(3);
+        setNewTaskPriority("medium");
       };
 
-      const handleDeleteTask = (id) => {
-        setTasks(tasks.filter(t => t.id !== id));
-      };
+      const handleDeleteTask = (id) => setTasks(tasks.filter(t => t.id !== id));
 
-      // 使えない日（予定あり日）操作
       const handleAddBlockedDate = () => {
         if (!newBlockDate) return;
-        setBlockedDates({
-          ...blockedDates,
-          [newBlockDate]: Number(newBlockHours)
-        });
+        setBlockedDates({ ...blockedDates, [newBlockDate]: Number(newBlockHours) });
       };
 
       const handleRemoveBlockedDate = (dateStr) => {
@@ -204,14 +197,24 @@
         setBlockedDates(next);
       };
 
+      const getPriorityBadge = (p) => {
+        switch (p) {
+          case 'high':
+            return <span class="bg-rose-100 text-rose-700 text-[10px] font-bold px-2 py-0.5 rounded">高</span>;
+          case 'low':
+            return <span class="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded">低</span>;
+          default:
+            return <span class="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded">中</span>;
+        }
+      };
+
       return (
         <div class="max-w-7xl mx-auto px-4 py-8">
-          {/* ヘッダー */}
           <header class="mb-8 border-b pb-6 border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
               <div class="flex items-center gap-2 mb-1">
-                <span class="bg-indigo-600 text-white text-xs font-bold px-2.5 py-1 rounded-md tracking-wide uppercase">MVP App</span>
-                <span class="text-xs text-slate-500 font-medium">手書きノート要件定義の実装</span>
+                <span class="bg-indigo-600 text-white text-xs font-bold px-2.5 py-1 rounded-md uppercase">MVP App</span>
+                <span class="text-xs text-slate-500 font-medium">優先度自動ソート機能つき</span>
               </div>
               <h1 class="text-3xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
                 <i class="fa-solid fa-calendar-check text-indigo-600"></i>
@@ -220,33 +223,29 @@
             </div>
             <div class="text-right bg-indigo-50 border border-indigo-100 px-4 py-2 rounded-xl text-xs text-indigo-800">
               <i class="fa-solid fa-bolt text-indigo-500 mr-1.5"></i>
-              締め切りから逆算してリアルタイム自動スケジューリング中
+              優先度の高いタスクを締め切り付近へ最優先配分
             </div>
           </header>
 
           <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            {/* 左側：設定・入力エリア（ノート要件1〜6） */}
             <div class="lg:col-span-5 space-y-6">
               
-              {/* 1. 目標 & 4. 期間設定 */}
+              {/* 1. 目標 & 期間 */}
               <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
                 <h2 class="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2 border-b pb-3">
                   <span class="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 text-xs flex items-center justify-center font-bold">1</span>
                   目標 & 達成期間
                 </h2>
-                
                 <div class="space-y-4">
                   <div>
-                    <label class="block text-xs font-bold text-slate-600 mb-1">1. 目標（プロダクト名など）</label>
+                    <label class="block text-xs font-bold text-slate-600 mb-1">目標</label>
                     <input
                       type="text"
                       value={goalTitle}
                       onChange={(e) => setGoalTitle(e.target.value)}
                       class="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                      placeholder="例: 自動逆算計画アプリの作成"
                     />
                   </div>
-
                   <div class="grid grid-cols-2 gap-3">
                     <div>
                       <label class="block text-xs font-bold text-slate-600 mb-1">開始日</label>
@@ -254,65 +253,56 @@
                         type="date"
                         value={startDate}
                         onChange={(e) => setStartDate(e.target.value)}
-                        class="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                        class="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl focus:outline-none"
                       />
                     </div>
                     <div>
-                      <label class="block text-xs font-bold text-slate-600 mb-1">4. 締め切り（達成目標日）</label>
+                      <label class="block text-xs font-bold text-slate-600 mb-1">締め切り</label>
                       <input
                         type="date"
                         value={deadline}
                         onChange={(e) => setDeadline(e.target.value)}
-                        class="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-semibold text-indigo-600"
+                        class="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl font-semibold text-indigo-600 focus:outline-none"
                       />
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* 5. 使える時間 & 6. 使えない日 */}
+              {/* 2. 作業可能時間 */}
               <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
                 <h2 class="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2 border-b pb-3">
                   <span class="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 text-xs flex items-center justify-center font-bold">2</span>
                   作業可能時間 & 予定設定
                 </h2>
-
                 <div class="space-y-4">
                   <div class="grid grid-cols-2 gap-3">
                     <div class="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                      <label class="block text-xs font-bold text-slate-600 mb-1">5. 平日の可能時間</label>
-                      <div class="flex items-center gap-1">
-                        <input
-                          type="number"
-                          min="0"
-                          max="24"
-                          value={weekdayHours}
-                          onChange={(e) => setWeekdayHours(e.target.value)}
-                          class="w-full px-2.5 py-1.5 text-sm font-bold border border-slate-300 rounded-lg text-center"
-                        />
-                        <span class="text-xs font-medium text-slate-500">時間/日</span>
-                      </div>
+                      <label class="block text-xs font-bold text-slate-600 mb-1">平日の可能時間</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="24"
+                        value={weekdayHours}
+                        onChange={(e) => setWeekdayHours(e.target.value)}
+                        class="w-full px-2.5 py-1.5 text-sm font-bold border border-slate-300 rounded-lg text-center"
+                      />
                     </div>
                     <div class="bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
-                      <label class="block text-xs font-bold text-indigo-900 mb-1">5. 休日の可能時間</label>
-                      <div class="flex items-center gap-1">
-                        <input
-                          type="number"
-                          min="0"
-                          max="24"
-                          value={weekendHours}
-                          onChange={(e) => setWeekendHours(e.target.value)}
-                          class="w-full px-2.5 py-1.5 text-sm font-bold border border-indigo-200 rounded-lg text-center text-indigo-700"
-                        />
-                        <span class="text-xs font-medium text-indigo-600">時間/日</span>
-                      </div>
+                      <label class="block text-xs font-bold text-indigo-900 mb-1">休日の可能時間</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="24"
+                        value={weekendHours}
+                        onChange={(e) => setWeekendHours(e.target.value)}
+                        class="w-full px-2.5 py-1.5 text-sm font-bold border border-indigo-200 rounded-lg text-center text-indigo-700"
+                      />
                     </div>
                   </div>
 
-                  {/* 6. 使えない日（除外日） */}
                   <div class="border-t pt-3">
-                    <label class="block text-xs font-bold text-slate-600 mb-2">6. 時間を使えない日・特別日設定</label>
-                    
+                    <label class="block text-xs font-bold text-slate-600 mb-2">時間を使えない日</label>
                     <div class="flex gap-2 mb-3">
                       <input
                         type="date"
@@ -325,26 +315,22 @@
                         onChange={(e) => setNewBlockHours(e.target.value)}
                         class="px-2 py-1.5 text-xs border border-slate-300 rounded-lg"
                       >
-                        <option value="0">0時間（終日予定あり）</option>
-                        <option value="1">1時間だけ作業可</option>
-                        <option value="2">2時間だけ作業可</option>
+                        <option value="0">0時間（終日不可）</option>
+                        <option value="1">1時間可</option>
+                        <option value="2">2時間可</option>
                       </select>
                       <button
                         onClick={handleAddBlockedDate}
-                        class="bg-slate-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg hover:bg-slate-700 transition"
+                        class="bg-slate-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg"
                       >
                         追加
                       </button>
                     </div>
-
                     <div class="flex flex-wrap gap-2">
                       {Object.entries(blockedDates).map(([d, h]) => (
-                        <span key={d} class="inline-flex items-center gap-1.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs px-2.5 py-1 rounded-lg font-medium">
-                          <i class="fa-solid fa-plane-departure text-[10px]"></i>
+                        <span key={d} class="inline-flex items-center gap-1.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs px-2.5 py-1 rounded-lg">
                           {d}: {h}時間
-                          <button onClick={() => handleRemoveBlockedDate(d)} class="hover:text-rose-900 ml-1">
-                            <i class="fa-solid fa-xmark"></i>
-                          </button>
+                          <button onClick={() => handleRemoveBlockedDate(d)} class="hover:text-rose-900 ml-1">×</button>
                         </span>
                       ))}
                     </div>
@@ -352,11 +338,11 @@
                 </div>
               </div>
 
-              {/* 2 & 3. サブタスクと必要時間 */}
+              {/* 3. タスク一覧と優先度 */}
               <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
                 <h2 class="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2 border-b pb-3">
                   <span class="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 text-xs flex items-center justify-center font-bold">3</span>
-                  タスク & 必要時間
+                  タスク & 優先度
                 </h2>
 
                 <div class="space-y-3 mb-4">
@@ -364,16 +350,14 @@
                     <div key={task.id} class="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl">
                       <div class="flex items-center gap-2">
                         <span class="text-xs font-bold text-slate-400">#{idx + 1}</span>
+                        {getPriorityBadge(task.priority)}
                         <span class="text-sm font-semibold text-slate-800">{task.name}</span>
                       </div>
                       <div class="flex items-center gap-3">
                         <span class="bg-indigo-100 text-indigo-700 font-bold text-xs px-2.5 py-1 rounded-md">
-                          {task.estimatedHours} 時間
+                          {task.estimatedHours}h
                         </span>
-                        <button
-                          onClick={() => handleDeleteTask(task.id)}
-                          class="text-slate-400 hover:text-rose-500 transition px-1"
-                        >
+                        <button onClick={() => handleDeleteTask(task.id)} class="text-slate-400 hover:text-rose-500 transition px-1">
                           <i class="fa-solid fa-trash-can text-sm"></i>
                         </button>
                       </div>
@@ -381,166 +365,97 @@
                   ))}
                 </div>
 
-                <div class="flex gap-2 pt-2 border-t border-slate-100">
+                <div class="flex gap-2 pt-2 border-t border-slate-100 flex-wrap">
                   <input
                     type="text"
-                    placeholder="2. 必要なこと（タスク名）"
+                    placeholder="タスク名"
                     value={newTaskName}
                     onChange={(e) => setNewTaskName(e.target.value)}
-                    class="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    class="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-xl focus:outline-none min-w-[120px]"
                   />
                   <input
                     type="number"
                     min="1"
-                    placeholder="3. 時間"
+                    placeholder="時間"
                     value={newTaskHours}
                     onChange={(e) => setNewTaskHours(e.target.value)}
-                    class="w-16 px-2 py-2 text-xs border border-slate-300 rounded-xl text-center focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    class="w-16 px-2 py-2 text-xs border border-slate-300 rounded-xl text-center focus:outline-none"
                   />
+                  <select
+                    value={newTaskPriority}
+                    onChange={(e) => setNewTaskPriority(e.target.value)}
+                    class="px-2 py-2 text-xs border border-slate-300 rounded-xl focus:outline-none bg-white"
+                  >
+                    <option value="high">優先度: 高</option>
+                    <option value="medium">優先度: 中</option>
+                    <option value="low">優先度: 低</option>
+                  </select>
                   <button
                     onClick={handleAddTask}
-                    class="bg-indigo-600 text-white font-bold text-xs px-4 py-2 rounded-xl hover:bg-indigo-700 transition flex items-center gap-1"
+                    class="bg-indigo-600 text-white font-bold text-xs px-4 py-2 rounded-xl hover:bg-indigo-700 transition"
                   >
-                    <i class="fa-solid fa-plus"></i> 追加
+                    追加
                   </button>
                 </div>
               </div>
 
             </div>
 
-            {/* 右側：7. 計算結果＆カレンダー表示エリア */}
+            {/* カレンダー表示エリア */}
             <div class="lg:col-span-7 space-y-6">
-              
-              {/* ステータス概要カード */}
               {scheduleResult && (
-                <div class={`rounded-2xl p-6 shadow-sm border transition-all ${
-                  scheduleResult.isPossible 
-                    ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900' 
-                    : 'bg-rose-50/70 border-rose-200 text-rose-900'
-                }`}>
-                  <div class="flex items-center justify-between mb-4">
-                    <div class="flex items-center gap-3">
-                      <div class={`w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold ${
-                        scheduleResult.isPossible ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'
-                      }`}>
-                        <i class={`fa-solid ${scheduleResult.isPossible ? 'fa-circle-check' : 'fa-triangle-exclamation'}`}></i>
-                      </div>
-                      <div>
-                        <h3 class="font-bold text-base">
-                          {scheduleResult.isPossible ? '🎉 計画達成可能です！' : '⚠️ 計画が破綻しています（時間が不足）'}
-                        </h3>
-                        <p class="text-xs opacity-80">
-                          {scheduleResult.isPossible 
-                            ? '締め切りまでに無理のない自動配分が完了しました。' 
-                            : `全体で 【${scheduleResult.unallocatedHours}時間】 不足しています。締め切りを伸ばすか作業時間を増やしてください。`}
-                        </p>
-                      </div>
+                <div class={`rounded-2xl p-6 shadow-sm border ${scheduleResult.isPossible ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900' : 'bg-rose-50/70 border-rose-200 text-rose-900'}`}>
+                  <div class="flex items-center gap-3 mb-4">
+                    <div class={`w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold ${scheduleResult.isPossible ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'}`}>
+                      <i class={`fa-solid ${scheduleResult.isPossible ? 'fa-circle-check' : 'fa-triangle-exclamation'}`}></i>
+                    </div>
+                    <div>
+                      <h3 class="font-bold text-base">{scheduleResult.isPossible ? '🎉 計画達成可能です！' : '⚠️ 時間が不足しています'}</h3>
+                      <p class="text-xs opacity-80">
+                        {scheduleResult.isPossible ? '優先度の高いタスクから順に自動配分されました。' : `全体で【${scheduleResult.unallocatedHours}時間】不足しています。`}
+                      </p>
                     </div>
                   </div>
-
-                  <div class="grid grid-cols-3 gap-3 pt-3 border-t border-current/10">
-                    <div class="bg-white/80 p-3 rounded-xl border border-current/10 text-center">
-                      <div class="text-[10px] font-bold opacity-70">必要合計時間</div>
-                      <div class="text-lg font-extrabold">{scheduleResult.totalRequiredHours} <span class="text-xs font-normal">時間</span></div>
-                    </div>
-                    <div class="bg-white/80 p-3 rounded-xl border border-current/10 text-center">
-                      <div class="text-[10px] font-bold opacity-70">期間内確保時間</div>
-                      <div class="text-lg font-extrabold">{scheduleResult.totalAvailableHours} <span class="text-xs font-normal">時間</span></div>
-                    </div>
-                    <div class="bg-white/80 p-3 rounded-xl border border-current/10 text-center">
-                      <div class="text-[10px] font-bold opacity-70">余裕・残時間</div>
-                      <div class={`text-lg font-extrabold ${scheduleResult.isPossible ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {scheduleResult.totalAvailableHours - scheduleResult.totalRequiredHours} <span class="text-xs font-normal">時間</span>
-                      </div>
-                    </div>
+                  <div class="grid grid-cols-3 gap-3 pt-3 border-t border-current/10 text-center">
+                    <div><div class="text-[10px] opacity-70">必要合計</div><div class="text-lg font-extrabold">{scheduleResult.totalRequiredHours}h</div></div>
+                    <div><div class="text-[10px] opacity-70">確保可能</div><div class="text-lg font-extrabold">{scheduleResult.totalAvailableHours}h</div></div>
+                    <div><div class="text-[10px] opacity-70">余裕時間</div><div class="text-lg font-extrabold">{scheduleResult.totalAvailableHours - scheduleResult.totalRequiredHours}h</div></div>
                   </div>
                 </div>
               )}
 
-              {/* 7. 日々の逆算カレンダー結果 */}
               <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
-                <div class="flex items-center justify-between mb-6 border-b pb-4">
-                  <div>
-                    <h2 class="text-lg font-bold text-slate-900 flex items-center gap-2">
-                      <i class="fa-solid fa-list-check text-indigo-600"></i>
-                      7. 自動逆算スケジュール（日別作業プラン）
-                    </h2>
-                    <p class="text-xs text-slate-500">締め切り（{deadline}）から遡って日々に自動配分された時間です。</p>
-                  </div>
-                </div>
+                <h2 class="text-lg font-bold text-slate-900 mb-6 border-b pb-4 flex items-center gap-2">
+                  <i class="fa-solid fa-list-check text-indigo-600"></i> 自動逆算スケジュール
+                </h2>
 
-                {!scheduleResult ? (
-                  <div class="text-center py-12 text-slate-400 text-sm">
-                    日付範囲を正しく入力してください。
-                  </div>
-                ) : (
+                {scheduleResult && (
                   <div class="space-y-4">
                     {scheduleResult.dailySchedules.map((day) => {
                       const isBlocked = day.availableHours === 0;
-
                       return (
-                        <div
-                          key={day.date}
-                          class={`p-4 rounded-xl border transition-all ${
-                            isBlocked 
-                              ? 'bg-slate-100/70 border-slate-200 opacity-60' 
-                              : day.allocatedHours > 0 
-                                ? 'bg-indigo-50/30 border-indigo-200' 
-                                : 'bg-white border-slate-200'
-                          }`}
-                        >
-                          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-                            <div class="flex items-center gap-3">
-                              <div class={`px-3 py-1 rounded-lg text-xs font-bold ${
-                                day.isWeekend ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
-                              }`}>
-                                {day.date} ({day.dayOfWeek})
-                              </div>
-                              {isBlocked && (
-                                <span class="bg-rose-100 text-rose-700 text-[10px] font-bold px-2 py-0.5 rounded">
-                                  予定あり（0時間）
-                                </span>
-                              )}
-                            </div>
-
-                            <div class="flex items-center gap-2 text-xs font-medium">
-                              <span class="text-slate-500">可能: {day.availableHours}h</span>
-                              <span class="text-slate-300">|</span>
-                              <span class={`font-bold ${day.allocatedHours > 0 ? 'text-indigo-600' : 'text-slate-400'}`}>
-                                割り当て: {day.allocatedHours}h
-                              </span>
-                            </div>
+                        <div key={day.date} class={`p-4 rounded-xl border ${isBlocked ? 'bg-slate-100/70 border-slate-200 opacity-60' : day.allocatedHours > 0 ? 'bg-indigo-50/30 border-indigo-200' : 'bg-white border-slate-200'}`}>
+                          <div class="flex justify-between items-center mb-2">
+                            <span class="text-xs font-bold px-3 py-1 rounded-lg bg-slate-200 text-slate-700">{day.date} ({day.dayOfWeek})</span>
+                            <span class="text-xs font-medium text-slate-500">可能: {day.availableHours}h | 割り当て: {day.allocatedHours}h</span>
                           </div>
-
-                          {/* プログレスバー */}
-                          {day.availableHours > 0 && (
-                            <div class="w-full bg-slate-100 rounded-full h-2 mb-3 overflow-hidden border border-slate-200">
-                              <div
-                                class="bg-indigo-600 h-2 rounded-full transition-all duration-300"
-                                style={{ width: `${Math.min(100, (day.allocatedHours / day.availableHours) * 100)}%` }}
-                              ></div>
-                            </div>
-                          )}
-
-                          {/* タスク内訳 */}
                           {day.assignedTasks.length > 0 ? (
                             <div class="space-y-1.5 pl-2 border-l-2 border-indigo-400">
                               {day.assignedTasks.map((t, idx) => (
                                 <div key={idx} class="flex items-center justify-between text-xs">
                                   <span class="font-semibold text-slate-700 flex items-center gap-1.5">
                                     <i class="fa-solid fa-check text-indigo-500 text-[10px]"></i>
+                                    {getPriorityBadge(t.priority)}
                                     {t.taskName}
                                   </span>
                                   <span class="bg-white border border-indigo-200 text-indigo-700 font-bold px-2 py-0.5 rounded text-[11px]">
-                                    {t.hours} 時間作業
+                                    {t.hours} 時間
                                   </span>
                                 </div>
                               ))}
                             </div>
                           ) : (
-                            <div class="text-xs text-slate-400 italic">
-                              {isBlocked ? '予定があるため作業は割り当てられません。' : '作業なし（空き日）'}
-                            </div>
+                            <div class="text-xs text-slate-400 italic">{isBlocked ? '予定あり' : '作業なし'}</div>
                           )}
                         </div>
                       );
@@ -548,7 +463,6 @@
                   </div>
                 )}
               </div>
-
             </div>
           </div>
         </div>
